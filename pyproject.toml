@@ -66,6 +66,9 @@ atom_sglang = "atom.plugin.sglang.register:register_plugin"
 # this directory below, for the same reason.
 "tests/models/glm52/kernels/*.py" = ["ALL"]
 
+"atom/mono/program/**/*.py" = ["ALL"]
+"atom/models/qwen4_exp_mono/whole_layer/**/*.py" = ["ALL"]
+
 [tool.black]
 # The same exemption, for the same reason: the ruff ignores above do not bind
 # black, and these trees are vendored from FlyDSL and kept byte-identical to
@@ -80,5 +83,7 @@ force-exclude = '''
 /(
     atom/models/glm52/mono/kernels
   | tests/models/glm52/kernels
+  | atom/mono/program
+  | atom/models/qwen4_exp_mono/whole_layer
 )/
 '''
