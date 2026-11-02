@@ -175,6 +175,13 @@ class Drafter(abc.ABC):
         model_class = resolve_obj_by_qualname(
             support_draft_model_arch_dict[draft_hf.architectures[0]]
         )
+        if draft_hf.architectures[0] == "Qwen4ExpMTPModel":
+            from atom.models.qwen4_exp_mono.config import config_refusal
+
+            if config_refusal(atom_config) is None:  # Qwen Mono serves this deployment
+                from atom.models.qwen4_exp_mono.draft.model import MonoMTP
+
+                model_class = MonoMTP
         self.model = self._build_draft_model(model_class)
 
         # Drafter-owned aux capture state (armed by arm_aux_capture).
@@ -622,6 +629,9 @@ class Drafter(abc.ABC):
             "lm_head.weight",
             "lm_head",
         )
+
+        if hasattr(self.model, "prepare_draft_head"):
+            self.model.prepare_draft_head()
 
     def _publish_draft_shape(
         self,

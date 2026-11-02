@@ -290,6 +290,39 @@ def test_decode_mrope_storage_matches_padded_graph_stride(monkeypatch, k):
         assert not graph_positions[:, tokens:].count_nonzero()
 
 
+@pytest.mark.parametrize("opted_in", [True, False])
+def test_mrope_draft_graph_stages_positions_batch_last(opted_in):
+    """Qwen3.8's MTP head records steps 1+ on `[3, bs]` positions; an MRoPE
+    draft model that has not opted in still declares no pass."""
+    from atom.models.qwen4_exp_mono.draft.model import MonoMTP
+    from atom.spec_decode.eagle_proposer import EagleProposer
+
+    proposer = SimpleNamespace(
+        runner=SimpleNamespace(use_mrope=True),
+        mtp_k=3,
+        speculative_config=SimpleNamespace(
+            draft_model_hf_config=SimpleNamespace(hidden_size=8, hc_count=2)
+        ),
+        model=object.__new__(MonoMTP) if opted_in else SimpleNamespace(),
+        dtype=torch.bfloat16,
+        _step_forward=lambda *a, **kw: None,
+        _step_head=lambda *a, **kw: None,
+        _step_warmup_inputs=lambda *a, **kw: None,
+    )
+    graphs = EagleProposer._declare_draft_graphs(proposer)
+    if not opted_in:
+        assert graphs == () and proposer.step is None
+        return
+    (graph,) = graphs
+    assert graph.inputs["hidden_states"].shape == (2, 8)
+    assert proposer._reuse_step_buffers
+    graph.bind(SimpleNamespace(max_num_seqs=8), "cpu")
+    positions = torch.arange(6, dtype=torch.int64).view(3, 2)
+    staged = graph.stage(4, {"positions": positions})["positions"]
+    assert staged.shape == (3, 4) and staged.is_contiguous()
+    assert staged.tolist() == [[0, 1, 1, 1], [2, 3, 3, 3], [4, 5, 5, 5]]
+
+
 def test_draft_qsa_view_drops_only_graph_padding():
     from atom.model_ops.attentions.qwen4_exp_attn import Qwen4ExpQSAMetadata
 
@@ -383,8 +416,10 @@ def conv_reference(x, past, weight, dilation):
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU required")
-def test_mtp_shared_projection_uses_full_width_hidden_norm():
+@pytest.mark.parametrize("mono", [False, True])
+def test_mtp_shared_projection_uses_full_width_hidden_norm(mono):
     from atom.model_ops.qwen4_exp.hyperconnection import Qwen4ExpGroupedRMSNorm
+    from atom.models.qwen4_exp_mono.draft.model import MonoPredictor
     from atom.models.qwen4_exp_mtp import Qwen4ExpMultiTokenPredictor
 
     class IdentityDecoder(torch.nn.Module):
@@ -392,8 +427,10 @@ def test_mtp_shared_projection_uses_full_width_hidden_norm():
             return hidden
 
     torch.manual_seed(17)
-    n, hc, width, eps = 5, 4, 64, 1e-6
-    model = Qwen4ExpMultiTokenPredictor.__new__(Qwen4ExpMultiTokenPredictor)
+    # (Mono's predictor sends steps of at most 16 rows to its own draft layer path)
+    n, hc, width, eps = 17 if mono else 5, 4, 64, 1e-6
+    cls = MonoPredictor if mono else Qwen4ExpMultiTokenPredictor
+    model = cls.__new__(cls)
     torch.nn.Module.__init__(model)
     model.hc_count, model.hidden_size = hc, width
     model.pre_fc_norm_hidden = Qwen4ExpGroupedRMSNorm(hc * width, hc * width, eps)
